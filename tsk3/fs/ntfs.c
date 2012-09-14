@@ -106,6 +106,50 @@ nt2nano(uint64_t ntdate)
     return (uint32_t) (ntdate % 10000000);
 }
 
+/**
+ * Print the Encrypting File System (EFS) encryption key (FEK) block.
+ * Encrypted files contain a "$LOGGED_UTILITY_STREAM" attribute with
+ * the "EFS" name, which stores a file's protected encryption keys.
+ *
+ * @param hFile File name to print text to
+ * @param buf Buffer containing the data.
+ * @param len Length of the buffer.
+ *
+ * @returns 0 on error (empty buffer).
+ */
+#define NTFS_EFS_HEX_MAX 16
+int
+ntfs_efs_print_fek(FILE *hFile, const uint8_t *buf, const size_t len)
+{
+	int i;
+	uint8_t asc[NTFS_EFS_HEX_MAX + 1];
+
+	if (! len)
+		return 0;
+
+	memset(asc, '\0', NTFS_EFS_HEX_MAX + 1);
+
+	for (i = 0; i < len; i++) {
+		if (0 < i && i % NTFS_EFS_HEX_MAX == 0) {
+			tsk_fprintf(hFile, "\t|%s|\n", asc);
+			memset(asc, '\0', NTFS_EFS_HEX_MAX + 1);
+		}
+		else if (0 < i && i % (NTFS_EFS_HEX_MAX / 2) == 0)
+			tsk_fprintf(hFile, " - ");
+
+		tsk_fprintf(hFile, "%02X ", buf[i]);
+
+		if (0x20 <= buf[i] && 0x7F > buf[i])
+			asc[i % NTFS_EFS_HEX_MAX] = buf[i];
+		else
+			asc[i % NTFS_EFS_HEX_MAX] = '.';
+	}
+
+	tsk_fprintf(hFile, "\t|%s|\n", asc);
+	// tsk_fprintf(hFile, "\n", buf[i]);
+
+	return 1;
+}
 
 /**********************************************************************
  *
@@ -1606,8 +1650,8 @@ static uint8_t ntfs_proc_attrlist(NTFS_INFO *, TSK_FS_FILE *,
  * MFTNUM. With the case of attribute lists, a file may use multiple
  * MFT entires and therefore have multiple attributes with the same
  * type and id pair (if they are in different MFT entries). This map
- * is created by proc_attrlist when it assigns unique IDs to the 
- * other entries.  proc_attrseq uses this when it adds the attributes. 
+ * is created by proc_attrlist when it assigns unique IDs to the
+ * other entries.  proc_attrseq uses this when it adds the attributes.
  */
 typedef struct {
     int num_used;
@@ -1629,7 +1673,7 @@ typedef struct {
  * @param attrseq Start of the attribute sequence to analyze
  * @param len Length of the attribute sequence buffer
  * @param a_attrinum MFT entry address that the attribute sequence came from (diff from fs_file for attribute lists)
- * @param a_attr_map List that maps to new IDs that were assigned by processing 
+ * @param a_attr_map List that maps to new IDs that were assigned by processing
  * the attribute list attribute (if it exists) or NULL if there is no attrlist.
  * @returns Error code
  */
@@ -1672,7 +1716,7 @@ ntfs_proc_attrseq(NTFS_INFO * ntfs,
         uint16_t id = tsk_getu16(fs->endian, attr->id);
         uint16_t id_new = id;
 
-        /* If the map was supplied, search through it to see if this 
+        /* If the map was supplied, search through it to see if this
          * entry is in there.  Use that ID instead so that we always have
          * unique IDs for each attribute -- even if it spans multiple MFT entries. */
         if (a_attr_map) {
@@ -1852,8 +1896,8 @@ ntfs_proc_attrseq(NTFS_INFO * ntfs,
              * We could also check for a start_vcn if this does
              * not fix the problem.
              *
-             * NOTE: This should not be needed now that TSK assigns 
-             * unique ID values to the extended attributes. 
+             * NOTE: This should not be needed now that TSK assigns
+             * unique ID values to the extended attributes.
              */
             if (id_new == 0) {
                 int cnt, i;
@@ -2206,7 +2250,7 @@ ntfs_proc_attrseq(NTFS_INFO * ntfs,
  *
  * @param ntfs File system being analyzed
  * @param fs_file Main file that will have attributes added to it.
- * @param fs_attr_attrlist Attrlist attribute that needs to be parsed. 
+ * @param fs_attr_attrlist Attrlist attribute that needs to be parsed.
  *
  * Return 1 on error and 0 on success
  */
@@ -2279,7 +2323,7 @@ ntfs_proc_attrlist(NTFS_INFO * ntfs,
 
     /* The TSK design requres that each attribute have its own ID.
      * Therefore, we need to identify all of the unique attributes
-     * so that we can assign a unique ID to them. 
+     * so that we can assign a unique ID to them.
      * In this process, we will also identify the unique MFT entries to
      * process. */
     nextid = fs_attr_attrlist->id;      // we won't see this entry in the list
@@ -2308,7 +2352,7 @@ ntfs_proc_attrlist(NTFS_INFO * ntfs,
         if (id > nextid)
             nextid = id;
 
-        /* First identify the unique attributes.  
+        /* First identify the unique attributes.
          * we can have duplicate entries at different VCNs.  Ignore those. */
         found = 0;
         for (i = 0; i < map->num_used; i++) {
@@ -2330,7 +2374,7 @@ ntfs_proc_attrlist(NTFS_INFO * ntfs,
                 map->num_used++;
         }
 
-        /* also check the todo list -- skip the base entry 
+        /* also check the todo list -- skip the base entry
          * the goal here is to get a unique list of MFT entries
          * to later process. */
         if (mftnum != fs_file->meta->addr) {
@@ -3377,7 +3421,7 @@ ntfs_load_secure(NTFS_INFO * ntfs)
 
     // arbitrary check because we had problems before with alloc too much memory
     if (sii_buffer.size > 64000000) {
-        if (tsk_verbose) 
+        if (tsk_verbose)
             tsk_fprintf(stderr, "ntfs_load_secure: sii_buffer.size is too large: %z\n", sii_buffer.size);
         return 0;
     }
@@ -3400,7 +3444,7 @@ ntfs_load_secure(NTFS_INFO * ntfs)
     sds_buffer.size = (size_t) roundup(fs_attr->size, fs->block_size);
     // arbitrary check because we had problems before with alloc too much memory
     if (sds_buffer.size > 64000000) {
-        if (tsk_verbose) 
+        if (tsk_verbose)
             tsk_fprintf(stderr, "ntfs_load_secure: sds_buffer.size is too large: %z\n", sds_buffer.size);
         return 0;
     }
@@ -4191,7 +4235,7 @@ ntfs_istat(TSK_FS_INFO * fs, FILE * hFile,
                 fs_file->meta->ctime -= sec_skew;
             if (fs_file->meta->crtime)
                 fs_file->meta->crtime -= sec_skew;
-            
+
             tsk_fprintf(hFile, "Created:\t%s\n",
                 tsk_fs_time_to_str(fs_file->meta->crtime, timeBuf));
             tsk_fprintf(hFile, "File Modified:\t%s\n",
@@ -4209,7 +4253,7 @@ ntfs_istat(TSK_FS_INFO * fs, FILE * hFile,
                 fs_file->meta->ctime += sec_skew;
             if (fs_file->meta->crtime == 0)
                 fs_file->meta->crtime += sec_skew;
-            
+
             tsk_fprintf(hFile, "\nOriginal times:\n");
         }
 
@@ -4515,6 +4559,36 @@ ntfs_istat(TSK_FS_INFO * fs, FILE * hFile,
                     ", Compressed" : "",
                     (fs_attr->flags & TSK_FS_ATTR_SPARSE) ? ", Sparse" :
                     "", fs_attr->size);
+
+				if ( ! (strncmp(fs_attr->name ? fs_attr->name : "N/A", "$EFS", 4)) ) {
+					/*
+					char *efs = (char *) tsk_malloc(fs_attr->size);
+					if (! efs) {
+						tsk_fprintf(hFile, "\nError allocating %i bytes for the DDF/DRF block\n");
+						tsk_error_print(hFile);
+						tsk_error_reset();
+					}
+					else if ( tsk_fs_file_read_type(fs_file, fs_attr->type, fs_attr->id,
+						0, efs, fs_attr->size, TSK_FS_FILE_READ_FLAG_NONE) ) {
+
+						tsk_fprintf(hFile, "\nError reading DDF/DRF block\n");
+						tsk_error_print(hFile);
+						tsk_error_reset();
+					}
+					else {
+						int i;
+						for (i = 0; i < fs_attr->size; i++)
+							tsk_fprintf(hFile, "%02X ", efs[i]);
+
+						tsk_fprintf(hFile, "\n");
+					}
+
+					free(efs);
+					*/
+					if (! ntfs_efs_print_fek(hFile, fs_attr->rd.buf, fs_attr->rd.buf_size) ) {
+						tsk_fprintf(hFile, "\nWarning DDF/DRF block was empty buf file is encrypted!\n");
+					}
+				}
 
             }
         }
