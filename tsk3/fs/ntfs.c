@@ -117,7 +117,49 @@ nt2nano(uint64_t ntdate)
  *
  * @returns 0 on error (empty buffer).
  */
+
+/*
+ * http://linux-ntfs.git.sourceforge.net/git/gitweb.cgi?p=linux-ntfs/linux-ntfs;a=tree
+ * http://linux-ntfs.git.sourceforge.net/git/gitweb.cgi?p=linux-ntfs/linux-ntfs;a=blob;f=include/ntfs/layout.h;h=eb1c43ecc1c3901cd80df355fbdaa637b9698fb1;hb=HEAD
+ */
+
+/*
+ * The header of the Logged utility stream (0x100) attribute named "$EFS".
+ */
+typedef struct {
+	uint32_t len;		/* Length of EFS attribute in bytes. */
+	uint32_t state;		/* Always 0? */
+	uint32_t version;	/* Efs version.  Always 2? */
+	uint32_t api_ver;	/* Always 0? */
+	uint8_t unk1[16];	/* MD5 hash of decrypted FEK? */
+	uint8_t unk2[16];	/* MD5 hash of DDFs? */
+	uint8_t unk3[16];	/* MD5 hash of DRFs? */
+	uint32_t off_ddf;	/* Offset in bytes to the array of data decryption fields (DDF) */
+	uint32_t off_drf;	/* Offset in bytes to the array of data recovery fields (DRF) */
+	uint32_t reserved;	/* Reserved. */
+} NTFS_EFS_ATTR_HEADER;
+
+/*
+ * Decryption field array header
+ */
+typedef struct {
+	uint32_t count;		/* Number of DDF/DRF fields in the array. */
+} NTFS_EFS_DF_ARR_HEADER;
+
+/*
+ * Decryption field array header
+ */
+typedef struct {
+uint32_t len;			/* Length of this data decryption/recovery field in bytes. */
+uint32_t off_cred;		/* Offset in bytes to the credential header. */
+uint32_t fek_len;		/* Size in bytes of the encrypted file encryption key (FEK). */
+uint32_t fek_off;		/* Offset in bytes to the FEK from the start of the data decryption/recovery field. */
+uint32_t unk;
+} NTFS_EFS_DF_HEADER;
+
+/* buffer size */
 #define NTFS_EFS_HEX_MAX 16
+
 int
 ntfs_efs_print_fek(FILE *hFile, const uint8_t *buf, const size_t len)
 {
@@ -127,11 +169,12 @@ ntfs_efs_print_fek(FILE *hFile, const uint8_t *buf, const size_t len)
 	if (! len)
 		return 0;
 
+	/* Hex dump FEK block */
 	memset(asc, '\0', NTFS_EFS_HEX_MAX + 1);
 
 	for (i = 0; i < len; i++) {
 		if (0 < i && i % NTFS_EFS_HEX_MAX == 0) {
-			tsk_fprintf(hFile, "\t|%s|\n", asc);
+			tsk_fprintf(hFile, "  |%s|\n", asc);
 			memset(asc, '\0', NTFS_EFS_HEX_MAX + 1);
 		}
 		else if (0 < i && i % (NTFS_EFS_HEX_MAX / 2) == 0)
@@ -145,8 +188,44 @@ ntfs_efs_print_fek(FILE *hFile, const uint8_t *buf, const size_t len)
 			asc[i % NTFS_EFS_HEX_MAX] = '.';
 	}
 
-	tsk_fprintf(hFile, "\t|%s|\n", asc);
-	// tsk_fprintf(hFile, "\n", buf[i]);
+	tsk_fprintf(hFile, "  |%s|\n", asc);
+
+	/* FEK header */
+	NTFS_EFS_ATTR_HEADER *efs = (NTFS_EFS_ATTR_HEADER *) buf;
+	int err = 0;
+
+	if (0 == efs->off_ddf)
+		tsk_printf("No user decryption key (DDF)!\n");
+	else if ((uint32_t) len <= efs->off_ddf) {
+		tsk_printf("Malformed user decryption key (DDF) offset!\n");
+		err = 1;
+	}
+	else if (0 == efs->off_drf)
+		tsk_printf("No recovery agent key (DRF)\n");
+	else if ((uint32_t) len <= efs->off_drf) {
+		tsk_printf("Malformed recovery agent key (DRF) offset!\n");
+		err = 1;
+	}
+
+	tsk_printf("EFS version: %u\tDDF offset: %u\tDRF offset: %u\n", efs->version, efs->off_ddf, efs->off_drf);
+
+	if (err) {
+		/* malformed fields detected, abort further parsing to avoid errors */
+		return 0;
+	}
+
+	/* DDF data */
+	err = 0;
+	uint32_t cnt = (uint32_t) buf[efs->off_ddf];
+
+	if (! cnt)
+		tsk_printf("No user decryption key (DDF) array!\n");
+	else if (sizeof(NTFS_EFS_DF_HEADER) * (uint16_t) cnt >= (uint32_t) len) {
+		tsk_printf("Malformed user decryption key (DDF) array size\n");
+		return 0;
+	}
+
+
 
 	return 1;
 }
@@ -4560,36 +4639,12 @@ ntfs_istat(TSK_FS_INFO * fs, FILE * hFile,
                     (fs_attr->flags & TSK_FS_ATTR_SPARSE) ? ", Sparse" :
                     "", fs_attr->size);
 
-				if ( ! (strncmp(fs_attr->name ? fs_attr->name : "N/A", "$EFS", 4)) ) {
-					/*
-					char *efs = (char *) tsk_malloc(fs_attr->size);
-					if (! efs) {
-						tsk_fprintf(hFile, "\nError allocating %i bytes for the DDF/DRF block\n");
-						tsk_error_print(hFile);
-						tsk_error_reset();
-					}
-					else if ( tsk_fs_file_read_type(fs_file, fs_attr->type, fs_attr->id,
-						0, efs, fs_attr->size, TSK_FS_FILE_READ_FLAG_NONE) ) {
-
-						tsk_fprintf(hFile, "\nError reading DDF/DRF block\n");
-						tsk_error_print(hFile);
-						tsk_error_reset();
-					}
-					else {
-						int i;
-						for (i = 0; i < fs_attr->size; i++)
-							tsk_fprintf(hFile, "%02X ", efs[i]);
-
-						tsk_fprintf(hFile, "\n");
-					}
-
-					free(efs);
-					*/
+				if (TSK_FS_ATTR_TYPE_NTFS_LOG == fs_attr->type && ! (strncmp(fs_attr->name ? fs_attr->name : "N/A", "$EFS", 4)) )
 					if (! ntfs_efs_print_fek(hFile, fs_attr->rd.buf, fs_attr->rd.buf_size) ) {
-						tsk_fprintf(hFile, "\nWarning DDF/DRF block was empty buf file is encrypted!\n");
+						tsk_fprintf(hFile, "\nError parsing EFS decryption block.\n");
+						tsk_error_print(hFile);
+						tsk_error_reset();
 					}
-				}
-
             }
         }
     }
